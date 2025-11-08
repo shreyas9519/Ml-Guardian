@@ -1,15 +1,18 @@
 """
-OptimizedFeatureEngineer (safe version for macOS)
-💡 No SentenceTransformer is ever loaded in the main process — embeddings handled via subprocess runner.
+OptimizedFeatureEngineer (GPU-enabled version for Windows/macOS/Linux)
+💡 Supports RTX GPU acceleration (via CUDA in embedding subprocess).
+Embeddings handled via subprocess runner (embedding_runner.py).
 """
 
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
+# --- Thread controls to avoid CPU oversubscription ---
+os.environ["OMP_NUM_THREADS"] = "4"
+os.environ["MKL_NUM_THREADS"] = "4"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "4"
+os.environ["OPENBLAS_NUM_THREADS"] = "4"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import re, json, subprocess, warnings, time
@@ -17,13 +20,25 @@ import numpy as np, pandas as pd
 from tqdm.auto import tqdm
 from typing import Dict, Any, Tuple
 
+# --- GPU check for subprocess ---
+try:
+    import torch
+    GPU_AVAILABLE = torch.cuda.is_available()
+    GPU_DEVICE = torch.cuda.get_device_name(0) if GPU_AVAILABLE else "CPU"
+    print(f"[INIT] PyTorch GPU available: {GPU_AVAILABLE} ({GPU_DEVICE})")
+except Exception:
+    GPU_AVAILABLE = False
+    GPU_DEVICE = "CPU"
+    print("[INFO] torch not available — embeddings will use CPU")
+
+# --- spaCy setup ---
 try:
     import spacy
     SPACY_AVAILABLE = True
 except ImportError:
     spacy = None
     SPACY_AVAILABLE = False
-    print("[INFO] spaCy not available - advanced NLP features will be disabled")
+    print("[INFO] spaCy not available - advanced NLP features disabled")
 
 
 class OptimizedFeatureEngineer:
@@ -34,17 +49,17 @@ class OptimizedFeatureEngineer:
                 self.nlp = spacy.load(spacy_model_name, disable=["parser", "textcat"])
                 self.nlp.max_length = 2_000_000
                 print(f"[SUCCESS] Loaded spaCy model: {spacy_model_name}")
-            except OSError as e:
-                print(f"[INFO] spaCy model '{spacy_model_name}' not found. Install with: python -m spacy download {spacy_model_name}")
-                self.nlp = None
+            except OSError:
+                print(f"[INFO] spaCy model '{spacy_model_name}' not found. Install it using:")
+                print(f"    python -m spacy download {spacy_model_name}")
             except Exception as e:
                 print(f"[WARNING] spaCy load failed: {e}")
-                self.nlp = None
         self.word_pattern = re.compile(r"\b\w+\b")
         self.number_pattern = re.compile(r"\d+")
         self.whitespace_pattern = re.compile(r"\s+")
-        print("[READY] FeatureEngineer ready — embeddings via subprocess runner")
+        print(f"[READY] FeatureEngineer ready — embeddings via subprocess (GPU={GPU_AVAILABLE})")
 
+    # --------------------------------------------------
     def _safe_text(self, x: Any) -> str:
         return str(x).strip() if x is not None else ""
 
@@ -70,12 +85,23 @@ class OptimizedFeatureEngineer:
         ec = sum(1 for x in ea if x.isupper()) / (len(ea) or 1)
         cs = [s for s in self.whitespace_pattern.sub(' ', c).split('.') if s.strip()]
         es = [s for s in self.whitespace_pattern.sub(' ', e).split('.') if s.strip()]
-        return {"claim_has_numbers": float(chn), "evidence_has_numbers": float(ehn),
-                "claim_caps_ratio": cc, "evidence_caps_ratio": ec,
-                "claim_sentence_count": len(cs), "evidence_sentence_count": len(es)}
+        return {
+            "claim_has_numbers": float(chn),
+            "evidence_has_numbers": float(ehn),
+            "claim_caps_ratio": cc,
+            "evidence_caps_ratio": ec,
+            "claim_sentence_count": len(cs),
+            "evidence_sentence_count": len(es)
+        }
 
     def _advanced_similarity_features(self, c, e):
         feats = {}
+        if not c.strip() or not e.strip():
+            return {k: 0.0 for k in [
+                "entity_overlap_ratio", "entity_jaccard", "noun_similarity",
+                "verb_similarity", "adj_similarity"
+            ]}
+
         if self.nlp:
             try:
                 cd, ed = self.nlp(c), self.nlp(e)
@@ -91,15 +117,17 @@ class OptimizedFeatureEngineer:
                     feats[f"{pos.lower()}_similarity"] = 1.0 - abs(cr - er)
             except Exception as ex:
                 warnings.warn(f"spaCy failed: {ex}")
-        for k in ["entity_overlap_ratio","entity_jaccard","noun_similarity","verb_similarity","adj_similarity"]:
-            feats.setdefault(k,0.0)
+        for k in ["entity_overlap_ratio", "entity_jaccard", "noun_similarity", "verb_similarity", "adj_similarity"]:
+            feats.setdefault(k, 0.0)
         return feats
 
     def _composite_features(self, base):
-        sc, eo, wo, js = (base.get("semantic_cosine", 0.0),
-                          base.get("entity_overlap_ratio", 0.0),
-                          base.get("word_overlap", 0.0),
-                          base.get("jaccard_similarity", 0.0))
+        sc, eo, wo, js = (
+            base.get("semantic_cosine", 0.0),
+            base.get("entity_overlap_ratio", 0.0),
+            base.get("word_overlap", 0.0),
+            base.get("jaccard_similarity", 0.0),
+        )
         return {
             "semantic_entity_interaction": sc * eo,
             "semantic_lexical_balance": sc * wo,
@@ -108,67 +136,94 @@ class OptimizedFeatureEngineer:
 
     def _clean(self, d):
         out = {}
-        for k,v in d.items():
+        for k, v in d.items():
             try:
-                v=float(v)
-                if np.isnan(v) or np.isinf(v): v=0.0
-                if k in ["semantic_cosine","jaccard_similarity","word_overlap"]:
-                    v=max(0.0,min(1.0,v))
-                out[k]=v
-            except: out[k]=0.0
+                v = float(v)
+                if np.isnan(v) or np.isinf(v):
+                    v = 0.0
+                if k in ["semantic_cosine", "jaccard_similarity", "word_overlap"]:
+                    v = max(0.0, min(1.0, v))
+                out[k] = v
+            except Exception:
+                out[k] = 0.0
         return out
 
-    # ---------- full extraction ----------
-    def extract_all_features(self, c, e):
-        c, e = self._safe_text(c), self._safe_text(e)
-        f={}
-        f.update(self._basic_lexical_features(c,e))
-        f.update(self._structural_features(c,e))
-        f.update(self._advanced_similarity_features(c,e))
-        f.update(self._composite_features(f))
-        return self._clean(f)
-
-    # ---------- safe subprocess embedding ----------
+    # ---------- subprocess embedding with GPU ----------
     def _run_embedding_batch(self, texts):
         try:
             inp = json.dumps({"texts": texts}).encode("utf8")
+            runner_path = os.path.join(os.path.dirname(__file__), "..", "neural", "embedding_runner.py")
+
+            # Pass GPU flag to subprocess
+            env_vars = {**os.environ}
+            if GPU_AVAILABLE:
+                env_vars["USE_CUDA"] = "1"
+
             proc = subprocess.run(
-                ["python", os.path.join(os.path.dirname(__file__), "..", "neural", "embedding_runner.py")],
-                input=inp, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300
+                [sys.executable, runner_path],
+                input=inp,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=300,
+                env=env_vars
             )
+
             if proc.returncode != 0:
-                warnings.warn(f"embedding subprocess failed with return code {proc.returncode}")
-                return [[0.0]*384 for _ in texts]
-            
-            out = json.loads(proc.stdout.decode("utf8"))
+                warnings.warn(f"embedding subprocess failed (code {proc.returncode})\nStderr: {proc.stderr.decode('utf8')[:300]}")
+                return [[0.0] * 384 for _ in texts]
+
+            out = json.loads(proc.stdout.decode("utf8") or "{}")
             if "embeddings" in out:
                 return out["embeddings"]
             elif "error" in out:
                 warnings.warn(f"embedding subprocess error: {out['error']}")
         except Exception as e:
             warnings.warn(f"embedding subprocess failed: {e}")
-        return [[0.0]*384 for _ in texts]
+        return [[0.0] * 384 for _ in texts]
 
-    def batch_extract_with_embeddings(self, df: pd.DataFrame, batch_size:int=32) -> Tuple[pd.DataFrame,np.ndarray,np.ndarray]:
-        total=len(df); feats=[]; claim_embs=[]; evid_embs=[]
-        claims=df["claim"].astype(str).tolist()
-        evids=df["evidence"].astype(str).tolist()
-        pbar=tqdm(total=total,desc="Extracting claim–evidence pairs",ncols=100)
-        start=time.time()
-        for i in range(0,total,batch_size):
-            c_batch=claims[i:i+batch_size]
-            e_batch=evids[i:i+batch_size]
-            for c,e in zip(c_batch,e_batch):
-                feats.append(self.extract_all_features(c,e))
+    # ---------- unified feature extractor ----------
+    def extract_all_features(self, claim: str, evidence: str) -> Dict[str, float]:
+        claim = self._safe_text(claim)
+        evidence = self._safe_text(evidence)
+
+        try:
+            base_feats = {}
+            base_feats.update(self._basic_lexical_features(claim, evidence))
+            base_feats.update(self._structural_features(claim, evidence))
+            base_feats.update(self._advanced_similarity_features(claim, evidence))
+            base_feats.update(self._composite_features(base_feats))
+            return self._clean(base_feats)
+        except Exception as e:
+            warnings.warn(f"extract_all_features failed: {e}")
+            return {}
+
+    # ---------- batch extraction ----------
+    def batch_extract_with_embeddings(self, df: pd.DataFrame, batch_size: int = 32) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+        total = len(df)
+        feats, claim_embs, evid_embs = [], [], []
+        claims = df["claim"].astype(str).tolist()
+        evids = df["evidence"].astype(str).tolist()
+        pbar = tqdm(total=total, desc="Extracting claim–evidence pairs", ncols=100)
+        start = time.time()
+
+        for i in range(0, total, batch_size):
+            c_batch = claims[i:i + batch_size]
+            e_batch = evids[i:i + batch_size]
+
+            for c, e in zip(c_batch, e_batch):
+                feats.append(self.extract_all_features(c, e))
+
             claim_embs.extend(self._run_embedding_batch(c_batch))
             evid_embs.extend(self._run_embedding_batch(e_batch))
+
             pbar.update(len(c_batch))
-            done=i+len(c_batch)
-            if done%500==0 or done==total:
-                el=time.time()-start
-                sp=done/max(el,1e-6)
-                rem=(total-done)/max(sp,1e-6)
-                pbar.set_postfix({"done":f"{done/total:.1%}","ETA":f"{rem/60:.1f}m"})
+            done = i + len(c_batch)
+            if done % 500 == 0 or done == total:
+                elapsed = time.time() - start
+                speed = done / max(elapsed, 1e-6)
+                eta = (total - done) / max(speed, 1e-6)
+                pbar.set_postfix({"done": f"{done/total:.1%}", "ETA": f"{eta/60:.1f}m"})
         pbar.close()
-        print(f"[SUCCESS] Finished {total} pairs in {round((time.time()-start)/60,2)} min")
-        return pd.DataFrame(feats).fillna(0.0),np.array(claim_embs,dtype="float32"),np.array(evid_embs,dtype="float32")
+
+        print(f"[SUCCESS] Finished {total} pairs in {round((time.time() - start) / 60, 2)} min")
+        return pd.DataFrame(feats).fillna(0.0), np.array(claim_embs, dtype="float32"), np.array(evid_embs, dtype="float32")

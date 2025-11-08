@@ -1,112 +1,75 @@
 # core/create_features.py
-"""
-Create feature parquet from raw FEVER-style jsonl.
-Saves to data/processed/features.parquet
-"""
-import numpy as np
 import os
-import json
+import sys
 import argparse
+import logging
+import numpy as np
 import pandas as pd
-from pathlib import Path
+from tqdm import tqdm
+from sentence_transformers import SentenceTransformer
+import torch
 
-from core.feature_engineer_optimized import OptimizedFeatureEngineer
+# Allow imports from parent dir
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+from core.config import cfg
 
-def load_jsonl(path):
-    rows = []
-    with open(path, "r", encoding="utf8") as f:
-        for line in f:
-            try:
-                rows.append(json.loads(line))
-            except Exception:
-                continue
-    return rows
+def set_seed(seed):
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-def prepare_dataframe(raw_rows):
-    # FEVER format varies: ensure claim and evidence exist
-    records = []
-    for r in raw_rows:
-        claim = r.get("claim") or r.get("sentence") or ""
-        label = r.get("label", None)
-        # evidence may be list-of-lists in FEVER; flatten text if present
-        evidence_text = ""
-        ev = r.get("evidence") or r.get("evidence_text") or r.get("evidence_sentences")
-        if isinstance(ev, list):
-            # if list of lists, flatten
-            if ev and isinstance(ev[0], list):
-                ev_texts = []
-                for part in ev:
-                    try:
-                        # sometimes (doc_id, sent_id, text)
-                        for p in part:
-                            if isinstance(p, str):
-                                ev_texts.append(p)
-                    except Exception:
-                        pass
-                evidence_text = " ".join(ev_texts)
-            else:
-                # list of strings
-                evidence_text = " ".join([str(x) for x in ev if x])
-        else:
-            evidence_text = ev or ""
+def main(raw_path=None, out_path=None, batch_size=32):
+    raw_path = raw_path or cfg["paths"]["raw_train"]
+    out_path = out_path or cfg["paths"]["processed_features"]
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-        records.append({
-            "claim": claim,
-            "evidence": evidence_text,
-            "label": label
-        })
-    return pd.DataFrame(records)
+    logging.info(f"[create_features] Loading raw: {raw_path}")
+    df = pd.read_json(raw_path, lines=True)
+    logging.info(f"[create_features] Loaded {len(df)} rows")
 
-def main(raw_path, out_path, batch_size=16):
-    print(f"[create_features] Loading raw: {raw_path}")
-    rows = load_jsonl(raw_path)
-    df = prepare_dataframe(rows)
-    print(f"[create_features] Loaded {len(df)} rows; extracting features (this may take time)...")
+    # Expected columns: claim, evidence, label
+    if not {"claim", "evidence", "label"} <= set(df.columns):
+        raise ValueError("Input JSONL must contain 'claim', 'evidence', 'label' columns")
 
-    fe = OptimizedFeatureEngineer()
-   # Extract features and embeddings safely
-    feats_df, claim_emb, evid_emb = fe.batch_extract_with_embeddings(df, batch_size=batch_size)
+    # Initialize transformer
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logging.info(f"[create_features] Using device: {device}")
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=device)
 
-    # Ensure label preserved and convert to integers
-    if "label" in df.columns:
-        # Convert string labels to integers using the label mapping
-        from core.labels import REVERSE_LABEL_MAP
-        feats_df["label"] = df["label"].map(REVERSE_LABEL_MAP).fillna(2).astype(int)
+    # Combine claim and evidence for joint embedding
+    sentences = [
+        f"Claim: {c} Evidence: {e}"
+        for c, e in zip(df["claim"], df["evidence"])
+    ]
 
-    out_dir = os.path.dirname(out_path)
-    os.makedirs(out_dir, exist_ok=True)
-    
-    # Save the main features dataframe as parquet
+    logging.info(f"[create_features] Encoding {len(sentences)} pairs...")
+    embeddings = []
+    for i in tqdm(range(0, len(sentences), batch_size)):
+        batch = sentences[i:i+batch_size]
+        emb = model.encode(batch, show_progress_bar=False, convert_to_numpy=True, device=device, normalize_embeddings=True)
+        embeddings.append(emb)
+    embeddings = np.vstack(embeddings)
+
+    # Convert embeddings to DataFrame
+    feat_cols = [f"emb_{i}" for i in range(embeddings.shape[1])]
+    feats_df = pd.DataFrame(embeddings, columns=feat_cols)
+
+    # Attach labels
+    label_map = {"SUPPORTS": 0, "REFUTES": 1, "NOT ENOUGH INFO": 2}
+    feats_df["label"] = df["label"].map(label_map).fillna(-1).astype(int)
+
+    logging.info(f"[create_features] Saving {feats_df.shape} to {out_path}")
     feats_df.to_parquet(out_path, index=False)
-    
-    # Save embeddings separately with error handling
-    try:
-        claim_emb_path = out_path.replace(".parquet", "_claim_emb.npy")
-        evid_emb_path = out_path.replace(".parquet", "_evid_emb.npy")
-        
-        # Check available disk space
-        import shutil
-        free_space = shutil.disk_usage(os.path.dirname(out_path)).free
-        required_space = claim_emb.nbytes + evid_emb.nbytes
-        
-        if required_space > free_space:
-            print(f"[WARNING] Insufficient disk space. Required: {required_space/1024/1024:.1f}MB, Available: {free_space/1024/1024:.1f}MB")
-            print("[INFO] Skipping embedding save due to disk space constraints")
-        else:
-            np.save(claim_emb_path, claim_emb)
-            np.save(evid_emb_path, evid_emb)
-            print(f"[create_features] Saved embeddings to: {claim_emb_path}, {evid_emb_path}")
-    except Exception as e:
-        print(f"[WARNING] Failed to save embeddings: {e}")
-        print("[INFO] Continuing without embedding files")
-    
-    print(f"[create_features] Saved features to: {out_path}")
-    return feats_df
+    logging.info("[create_features] ✅ Done!")
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(message)s")
     parser = argparse.ArgumentParser()
-    parser.add_argument("--raw", type=str, default="data/raw/fever_data/train.jsonl")
-    parser.add_argument("--out", type=str, default="data/processed/features.parquet")
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch size for embedding extraction")
+    parser.add_argument("--raw", default=None, help="Path to raw JSONL (train.jsonl)")
+    parser.add_argument("--out", default=None, help="Path to output parquet")
+    parser.add_argument("--batch_size", type=int, default=32)
     args = parser.parse_args()
     main(args.raw, args.out, args.batch_size)

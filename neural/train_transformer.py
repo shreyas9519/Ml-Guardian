@@ -99,19 +99,37 @@ def main(raw_features=None, out_dir=None):
     dataset = DatasetDict({"train": train_ds, "validation": val_ds})
 
     model = AutoModelForSequenceClassification.from_pretrained(cfg["transformer"]["model_name"], num_labels=len(LABEL_MAP))
+    # args = TrainingArguments(
+    #     output_dir=out_dir,
+    #     evaluation_strategy="epoch",
+    #     save_strategy="epoch",
+    #     learning_rate=cfg["transformer"]["lr"],
+    #     per_device_train_batch_size=cfg["transformer"]["batch_size"],
+    #     per_device_eval_batch_size=cfg["transformer"]["batch_size"],
+    #     num_train_epochs=cfg["transformer"]["epochs"],
+    #     weight_decay=0.01,
+    #     seed=SEED,
+    #     load_best_model_at_end=True,
+    #     metric_for_best_model="f1_macro"
+    # )
     args = TrainingArguments(
-        output_dir=out_dir,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        learning_rate=cfg["transformer"]["lr"],
-        per_device_train_batch_size=cfg["transformer"]["batch_size"],
-        per_device_eval_batch_size=cfg["transformer"]["batch_size"],
-        num_train_epochs=cfg["transformer"]["epochs"],
-        weight_decay=0.01,
-        seed=SEED,
-        load_best_model_at_end=True,
-        metric_for_best_model="f1_macro"
-    )
+    output_dir=out_dir,
+    logging_dir=f"{out_dir}/logs",
+    evaluation_strategy="epoch",         
+    save_strategy="epoch",               
+    save_total_limit=2,                 
+    learning_rate=cfg["transformer"]["lr"],
+    per_device_train_batch_size=cfg["transformer"]["batch_size"],
+    per_device_eval_batch_size=cfg["transformer"]["batch_size"],
+    num_train_epochs=cfg["transformer"]["epochs"],
+    weight_decay=0.01,
+    seed=SEED,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_f1_macro",  
+    logging_steps=50,
+    report_to="none"                        
+)
+
 
     trainer = Trainer(
         model=model,

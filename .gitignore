@@ -1,89 +1,189 @@
-# OS / editors
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-*.code-workspace
+# =============================================================================
+# ML Guardian Hallucination Detector - .gitignore
+# =============================================================================
 
-# Python bytecode / cache
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+eggs/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg
 
-# Virtual environments
+# -----------------------------------------------------------------------------
+# Virtual Environments
+# -----------------------------------------------------------------------------
 .env
 .venv
 venv/
 ENV/
 mlvenv/
+mlvenv310/
+myenv/
+myenv_requirements.lock
 
-# Jupyter
+# -----------------------------------------------------------------------------
+# IDE and Editor Files
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+*.swp
+*.swo
+*~
+.cursor/
+
+# -----------------------------------------------------------------------------
+# OS Files
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# -----------------------------------------------------------------------------
+# Jupyter Notebooks
+# -----------------------------------------------------------------------------
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
+*.ipynb_checkpoints
 
-# Build / distribution
-build/
-dist/
-.eggs/
-*.egg-info/
-*.egg
+# -----------------------------------------------------------------------------
+# ML Model Files (Large Binary Files)
+# -----------------------------------------------------------------------------
+*.parquet
+*.joblib
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.keras
+*.pt
+*.pth
+*.pth.tar
+*.bin
+*.safetensors
+*.ckpt
+*.onnx
+*.pb
+*.tflite
 
-# Logs / reports
-logs/
-*.log
-mlruns/
+# -----------------------------------------------------------------------------
+# Project Data and Artifacts
+# -----------------------------------------------------------------------------
+# Models directory - ignore all but keep structure
+models/**
+!models/.gitkeep
+!models/README.md
 
-# Caches
+# Processed data - ignore all but keep structure
+data/processed/**
+!data/processed/.gitkeep
+!data/processed/README.md
+
+# Raw data - ignore large files but keep structure
+data/raw/**/*.jsonl
+data/raw/**/*.csv
+data/raw/**/*.tsv
+data/raw/**/*.json
+!data/raw/.gitkeep
+!data/raw/README.md
+!data/raw/**/.gitkeep
+
+# -----------------------------------------------------------------------------
+# ML Frameworks and Tools
+# -----------------------------------------------------------------------------
+# Hugging Face
 .cache/
-**/.cache/
 .huggingface/
+transformers_cache/
+
+# Weights & Biases
 wandb/
+
+# MLflow
+mlruns/
+mlflow.db
+
+# Optuna
+optuna.db
 .experiment/
 
 # Streamlit
 streamlit/.cache/
 **/streamlit/.cache/
 
-# Project data and artifacts (keep dirs via .gitkeep if needed)
-models/**
-!models/.gitkeep
+# -----------------------------------------------------------------------------
+# Logs and Reports
+# -----------------------------------------------------------------------------
+logs/
+*.log
+*.prof
 
-data/processed/**
-!data/processed/.gitkeep
-
-data/raw/**
-!data/raw/.gitkeep
-
-# Common large ML files
-*.parquet
-*.joblib
-*.npy
-*.npz
-*.h5
-*.keras
-*.pt
-*.bin
-*.safetensors
-
-# Local tooling
-.ai/terminal/**
-.cursor/
-
-# Temp files
-*.tmp
-*.bak
-
-
-# Node (if any embedded UI)
-node_modules/
-
-# Testing / coverage
+# -----------------------------------------------------------------------------
+# Testing and Coverage
+# -----------------------------------------------------------------------------
+.pytest_cache/
 .coverage
 .coverage.*
 htmlcov/
 .tox/
-.pytest_cache/
+.nox/
+.hypothesis/
+*.cover
 
-# Environment files
+# -----------------------------------------------------------------------------
+# Type Checking
+# -----------------------------------------------------------------------------
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+# -----------------------------------------------------------------------------
+# Environment and Config Files
+# -----------------------------------------------------------------------------
 *.env
 .env.*
+.env.local
+.env.*.local
+
+# -----------------------------------------------------------------------------
+# Temporary Files
+# -----------------------------------------------------------------------------
+*.tmp
+*.bak
+.project_tree.txt
+
+# -----------------------------------------------------------------------------
+# Documentation Build
+# -----------------------------------------------------------------------------
+docs/_build/
+site/
+
+# -----------------------------------------------------------------------------
+# Local Tooling
+# -----------------------------------------------------------------------------
+.ai/terminal/**
+
+# -----------------------------------------------------------------------------
+# Node.js (if any embedded UI)
+# -----------------------------------------------------------------------------
+node_modules/

@@ -5,9 +5,16 @@ Label mappings for FEVER dataset
 
 # FEVER dataset labels
 LABEL_MAP = {
-    0: "SUPPORTS",
-    1: "REFUTES", 
-    2: "NOT_ENOUGH_INFO"
+    "SUPPORTS": 0,
+    "REFUTES": 1,
+    "NOT ENOUGH INFO": 2,
+    "Supports": 0,
+    "Refutes": 1,
+    "Not Enough Info": 2,
+    "NEI": 2,
+    "supports": 0,
+    "refutes": 1,
+    "not enough info": 2
 }
 
 # Alternative label mappings for different formats

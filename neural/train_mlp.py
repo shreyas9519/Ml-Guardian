@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 from core.config import cfg
 from core.labels import LABEL_MAP, REVERSE_LABEL_MAP
+from core.metrics import classification_metrics
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, Dense, Dropout, BatchNormalization, Concatenate
 from tensorflow.keras.optimizers import Adam
@@ -73,11 +74,13 @@ def main(features_path=None, claim_emb_path=None, evid_emb_path=None, out_model=
         emb = None
         emb_dim = 0
 
-    # train/val split
-    X_tr, X_va, y_tr, y_va = train_test_split(X, y, test_size=0.15, random_state=SEED, stratify=y)
+    # train/val split with index alignment to keep embeddings in sync
+    idx = np.arange(len(X))
+    idx_tr, idx_va, y_tr, y_va = train_test_split(idx, y, test_size=0.15, random_state=SEED, stratify=y)
+    X_tr, X_va = X[idx_tr], X[idx_va]
     if use_embeddings:
-        emb_tr = emb[:len(X_tr)]
-        emb_va = emb[len(X_tr):len(X_tr)+len(X_va)]
+        emb_tr = emb[idx_tr]
+        emb_va = emb[idx_va]
     else:
         emb_tr = emb_va = None
 
@@ -111,6 +114,26 @@ def main(features_path=None, claim_emb_path=None, evid_emb_path=None, out_model=
         history = model.fit(X_tr, y_tr, validation_data=(X_va, y_va),
                           epochs=cfg["mlp"]["epochs"], batch_size=cfg["mlp"]["batch_size"],
                           class_weight=class_weight, callbacks=callbacks)
+    # Evaluate on validation and print accuracy + confusion matrix
+    try:
+        if use_embeddings:
+            prob_va = model.predict([X_va, emb_va], verbose=0)
+        else:
+            prob_va = model.predict(X_va, verbose=0)
+        y_pred = prob_va.argmax(axis=1)
+        labels_order = list(LABEL_MAP.keys())
+        metrics = classification_metrics(y_va, y_pred, labels=labels_order)
+        logging.info(f"[train_mlp] Val accuracy: {metrics['accuracy']:.4f}")
+        label_names = [LABEL_MAP[i] for i in labels_order]
+        cm = metrics["confusion_matrix"]
+        header = "\t" + "\t".join(label_names)
+        logging.info("[train_mlp] Confusion Matrix (rows=true, cols=pred):")
+        logging.info(header)
+        for i, row in enumerate(cm):
+            row_str = label_names[i] + "\t" + "\t".join(str(v) for v in row)
+            logging.info(row_str)
+    except Exception as e:
+        logging.warning(f"[train_mlp] Failed to compute/print validation metrics: {e}")
     # Save scaler + model wrapper
     try:
         import joblib
