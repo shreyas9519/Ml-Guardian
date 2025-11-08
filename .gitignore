@@ -94,18 +94,6 @@ models/**
 !models/README.md
 
 # Processed data - ignore all but keep structure
-data/processed/**
-!data/processed/.gitkeep
-!data/processed/README.md
-
-# Raw data - ignore large files but keep structure
-data/raw/**/*.jsonl
-data/raw/**/*.csv
-data/raw/**/*.tsv
-data/raw/**/*.json
-!data/raw/.gitkeep
-!data/raw/README.md
-!data/raw/**/.gitkeep
 
 # -----------------------------------------------------------------------------
 # ML Frameworks and Tools
