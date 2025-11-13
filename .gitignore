@@ -93,8 +93,27 @@ models/**
 !models/.gitkeep
 !models/README.md
 
-# Processed data - ignore all but keep structure
+# Generated indexes
+data/index/
 
+# Output data
+outputs/
+reports/
+tmp/
+
+# Virtual envs
+venv/
+myenv/
+
+# Debug files
+*.txt
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Processed data - ignore all but keep structure
 # -----------------------------------------------------------------------------
 # ML Frameworks and Tools
 # -----------------------------------------------------------------------------
